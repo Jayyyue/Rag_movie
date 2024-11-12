@@ -15,7 +15,7 @@ import tabulate
 
 
 df = pd.read_csv(
-    r"C:\Users\yyuej\Desktop\AI实习\agency\agent\movie.csv",
+    r"\movie.csv",
     delimiter=",",
     quotechar='"',
     names=["title", "rating", "plot"],
