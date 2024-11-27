@@ -1,5 +1,13 @@
 import os
 import sys
+from tabnanny import verbose
+LANGCHAIN_TRACING_V2=True
+LANGCHAIN_ENDPOINT="https://api.smith.langchain.com"
+LANGCHAIN_API_KEY="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"
+LANGCHAIN_PROJECT="pr-weary-lever-12"
+import getpass
+import os
+os.environ["LANGCHAIN_API_KEY"]="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"
 from langchain_ollama import ChatOllama  # Updated import
 from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import HuggingFaceBgeEmbeddings
@@ -15,23 +23,21 @@ from langchain_experimental.agents import create_pandas_dataframe_agent
 import tabulate
 from langchain_core.messages import AIMessage
 from langchain_core.output_parsers import JsonOutputParser
+from langchain.agents import create_tool_calling_agent
+from langchain.agents import AgentExecutor
+from langchain_core.runnables import RunnablePassthrough
+from langchain_community.document_loaders import CSVLoader
 
 # Load your CSV file
-df = pd.read_csv(
-    r"movie.csv",
-    delimiter=",",
-    quotechar='"',
+df = CSVLoader(
+    r"C:\Users\yyuej\Desktop\AI实习\RAG2\movie.csv",
     encoding="utf-8"
 )
-
 # Generalize document creation based on DataFrame columns
-documents = []
-for _, row in df.iterrows():
-    content = "\n".join([f"{col}: {row[col]}" for col in df.columns])
-    documents.append(Document(page_content=content))
-
+documents = df.load()
+#print (documents)
 # Initialize the language model
-llm = ChatOllama(model="mistral", callbacks=[StreamingStdOutCallbackHandler()])
+llm = ChatOllama(model="llama3.2", callbacks=[StreamingStdOutCallbackHandler()],temperture=0.1)
 
 # Initialize embeddings and vector store
 embedding_model = HuggingFaceBgeEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
@@ -42,10 +48,11 @@ vectorstore = Chroma.from_documents(
     persist_directory="chroma_db"
 )
 
-retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
+retriever = vectorstore.as_retriever()
 
 # Define the QA prompt
-template = """You are an AI assistant that provides helpful answers based on the provided context.
+template = """
+You are an AI assistant that provides helpful answers based on the provided context.
 If you don't know the answer, just say that you don't know.
 
 Context:
@@ -54,7 +61,8 @@ Context:
 Question:
 {question}
 
-Answer:"""
+Answer:
+"""
 
 QA_PROMPT = PromptTemplate(
     template=template,
@@ -66,49 +74,36 @@ qa_chain = RetrievalQA.from_chain_type(
     llm=llm,
     chain_type="stuff",
     retriever=retriever,
-    chain_type_kwargs={"prompt": QA_PROMPT}
+    chain_type_kwargs={"prompt": QA_PROMPT},
 )
 
-# Create the DataFrame agent
-dataframe_agent = create_pandas_dataframe_agent(
-    llm,
-    df,
-    verbose=False,
-    agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
-    return_intermediate_steps=False,
-    allow_dangerous_code=True
+
+from langchain.tools.retriever import create_retriever_tool
+retriever_tool = create_retriever_tool(
+    retriever,
+    "document search",
+    "You are an assistant for finding information tasks. "
+    "Use the following pieces of retrieved context to answer the question. "
+    "If you don't know the answer, just say that you don't know. Use three sentences maximum and keep the answer concise."
 )
+
 
 # Define the tools for the agent
 tools = [
     Tool(
-        name="DataFrame Tool",
-        func=dataframe_agent.run,
-        description=(
-            "Useful for when you need to perform data analysis, computation, or generate plots "
-            "based on the CSV data."
-        ),
-    ),
-    Tool(
-        name="RetrievalQA Tool",
-        func=qa_chain.run,
-        description=(
-            "Useful for when you need to answer questions or provide information based on the content "
-            "of the documents."
-        ),
+        name="QA Tool",
+        func=retriever_tool,
+        description="Search for documents based on a query. All the questions is base on the data in the document.If you don't know the answer, just say that you don't know. Use three sentences maximum and keep the answer concise.If the document does not have that data, just say that the document is not found.",
     ),
 ]
-
-# Initialize the agent with the tools
-agent = create_pandas_dataframe_agent( llm,
-                                       df,
-                                       verbose=False,
-                                       agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
-                                       max_iterations=3,
-                                       allow_dangerous_code=True,
-                                       agent_executor_kwargs={"handle_parsing_errors": True},
-                                       return_intermediate_steps=False,
-                                       )
+myagent=initialize_agent(
+    llm=llm,
+    tools =tools,
+    agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
+    verbose=False,
+    return_intermediate_steps=False,
+    handle_parsing_errors=True,)
+# agent_executor = AgentExecutor(agent=myagent, tools=tools, verbose=True, handle_parsing_errors=True,return_intermediate_steps=False,)
 
 # Start the query loop
 while True:
@@ -117,11 +112,6 @@ while True:
         break
     if query.strip() == "":
         continue
+    myagent.invoke({"input": query})
 
-    try:
-        message = AIMessage(content='\`\`\`\n{"foo": "bar"}\n\`\`\`')
-        output_parser = JsonOutputParser()
-        result = agent.invoke(query)
-        print("\n")
-    except Exception as e:
-        print(f"An error occurred: {e}")
+    print("\n")
